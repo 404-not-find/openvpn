@@ -1938,53 +1938,107 @@ ccs_gen_config_file(struct multi_instance *mi)
 static enum client_connect_return
 multi_client_connect_call_plugin_v1(struct multi_context *m,
                                     struct multi_instance *mi,
-                                    unsigned int *option_types_found)
+                                    unsigned int *option_types_found,
+                                    bool deferred)
 {
     enum client_connect_return ret = CC_RET_SKIPPED;
 #ifdef ENABLE_PLUGIN
     ASSERT(m);
     ASSERT(mi);
     ASSERT(option_types_found);
+    struct client_connect_defer_state *ccs = &(mi->client_connect_defer_state);
 
     /* deprecated callback, use a file for passing back return info */
     if (plugin_defined(mi->context.plugins, OPENVPN_PLUGIN_CLIENT_CONNECT))
     {
         struct argv argv = argv_new();
-        struct gc_arena gc = gc_new();
-        const char *dc_file =
-            platform_create_temp_file(mi->context.options.tmp_dir, "cc", &gc);
-
-        if (!dc_file)
+        int call;
+        if (!deferred)
         {
-            ret = CC_RET_FAILED;
-            goto cleanup;
+            call = OPENVPN_PLUGIN_CLIENT_CONNECT;
+            if (!ccs_gen_config_file(mi)
+                || !ccs_gen_deferred_ret_file(mi))
+            {
+                ret = CC_RET_FAILED;
+                goto cleanup;
+            }
+        }
+        else
+        {
+            call = OPENVPN_PLUGIN_CLIENT_CONNECT_DEFER;
+            /* the initial call should have create these files */
+            ASSERT(ccs->config_file);
+            ASSERT(ccs->deferred_ret_file);
         }
 
-        argv_printf(&argv, "%s", dc_file);
-        if (plugin_call(mi->context.plugins, OPENVPN_PLUGIN_CLIENT_CONNECT,
-                        &argv, NULL, mi->context.c2.es)
-            != OPENVPN_PLUGIN_FUNC_SUCCESS)
+        argv_printf(&argv, "%s", ccs->config_file);
+        int plug_ret = plugin_call(mi->context.plugins, call,
+                                   &argv, NULL, mi->context.c2.es);
+        if (plug_ret == OPENVPN_PLUGIN_FUNC_SUCCESS)
+        {
+            multi_client_connect_post(m, mi, ccs->config_file,
+                                      option_types_found);
+            ret = CC_RET_SUCCEEDED;
+        }
+        else if (plug_ret == OPENVPN_PLUGIN_FUNC_DEFERRED)
+        {
+            ret = CC_RET_DEFERRED;
+            /**
+             * Contrary to the plugin v2 API, we do not dmeand a working
+             * deferred plugin as all return can be handled by the files
+             * and plugin_call return success if a plugin is not defined
+             */
+        }
+        else
         {
             msg(M_WARN, "WARNING: client-connect plugin call failed");
             ret = CC_RET_FAILED;
         }
-        else
-        {
-            multi_client_connect_post(m, mi, dc_file, option_types_found);
-            ret = CC_RET_SUCCEEDED;
-        }
 
-        {
-            msg(D_MULTI_ERRORS, "MULTI: problem deleting temporary file: %s",
-                dc_file);
-        }
 
+        /**
+         * plugin api v1 client connect async feature has both plugin and
+         * file return status, so in case that the file has a code that
+         * demands override, we override our return code
+         */
+        int file_ret = ccs_test_deferred_ret_file(mi);
+
+        if (file_ret == CC_RET_FAILED)
+        {
+            ret = CC_RET_FAILED;
+        }
+        else if (ret == CC_RET_SUCCEEDED && file_ret == CC_RET_DEFERRED)
+        {
+            ret = CC_RET_DEFERRED;
+        }
 cleanup:
         argv_free(&argv);
         gc_free(&gc);
+
+        if (ret != CC_RET_DEFERRED)
+        {
+            ccs_delete_config_file(mi);
+            ccs_delete_deferred_ret_file(mi);
+        }
     }
 #endif /* ifdef ENABLE_PLUGIN */
     return ret;
+}
+
+static enum client_connect_return
+multi_client_connect_call_plugin_v1_initial(struct multi_context *m,
+                                            struct multi_instance *mi,
+                                            unsigned int *option_types_found)
+{
+    return multi_client_connect_call_plugin_v1(m,mi, option_types_found, false);
+}
+
+static enum client_connect_return
+multi_client_connect_call_plugin_v1_deferred(struct multi_context *m,
+                                             struct multi_instance *mi,
+                                             unsigned int *option_types_found)
+{
+    return multi_client_connect_call_plugin_v1(m,mi, option_types_found, true);
 }
 
 static enum client_connect_return
@@ -2332,8 +2386,8 @@ static const struct client_connect_handlers client_connect_handlers[] = {
         .deferred = multi_client_connect_fail
     },
     {
-        .main = multi_client_connect_call_plugin_v1,
-        .deferred = multi_client_connect_fail
+        .main = multi_client_connect_call_plugin_v1_initial,
+        .deferred = multi_client_connect_call_plugin_v1_deferred,
     },
     {
         .main = multi_client_connect_call_plugin_v2,
