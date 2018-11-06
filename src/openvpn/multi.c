@@ -574,7 +574,8 @@ multi_client_disconnect_setenv(struct multi_instance *mi)
 static void
 multi_client_disconnect_script(struct multi_instance *mi)
 {
-    if ((mi->context.c2.context_auth == CAS_SUCCEEDED && mi->connection_established_flag)
+    if ((mi->context.c2.context_auth == CAS_SUCCEEDED
+         && mi->client_connect_status == CC_STATUS_ESTABLISHED)
         || mi->context.c2.context_auth == CAS_PARTIAL)
     {
         multi_client_disconnect_setenv(mi);
@@ -2050,7 +2051,7 @@ multi_client_connect_early_setup(struct multi_context *m,
  * Try to source a dynamic config file from the
  * --client-config-dir directory.
  */
-enum client_connect_return
+static enum client_connect_return
 multi_client_connect_source_ccd(struct multi_context *m,
                                 struct multi_instance *mi,
                                 unsigned int *option_types_found)
@@ -2195,7 +2196,7 @@ multi_connection_established(struct multi_context *m, struct multi_instance *mi)
         }
 
         /* set flag so we don't get called again */
-        mi->connection_established_flag = true;
+        mi->client_connect_status = CC_STATUS_ESTABLISHED;
 
         /* increment number of current authenticated clients */
         ++m->n_clients;
@@ -2483,7 +2484,8 @@ multi_process_post(struct multi_context *m, struct multi_instance *mi, const uns
         {
             /* connection is "established" when SSL/TLS key negotiation succeeds
              * and (if specified) auth user/pass succeeds */
-            if (!mi->connection_established_flag && CONNECTION_ESTABLISHED(&mi->context))
+            if (mi->client_connect_status != CC_STATUS_ESTABLISHED
+                && CONNECTION_ESTABLISHED(&mi->context))
             {
                 multi_connection_established(m, mi);
             }
@@ -3418,7 +3420,7 @@ management_client_auth(void *arg,
         {
             if (auth)
             {
-                if (!mi->connection_established_flag)
+                if (mi->client_connect_status == CC_STATUS_NOT_ESTABLISHED)
                 {
                     set_cc_config(mi, cc_config);
                     cc_config_owned = false;
@@ -3430,7 +3432,7 @@ management_client_auth(void *arg,
                 {
                     msg(D_MULTI_LOW, "MULTI: connection rejected: %s, CLI:%s", reason, np(client_reason));
                 }
-                if (mi->connection_established_flag)
+                if (mi->client_connect_status == CC_STATUS_ESTABLISHED)
                 {
                     send_auth_failed(&mi->context, client_reason); /* mid-session reauth failed */
                     multi_schedule_context_wakeup(m, mi);
