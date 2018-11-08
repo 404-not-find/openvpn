@@ -2504,8 +2504,10 @@ multi_connection_established(struct multi_context *m, struct multi_instance *mi)
 
 #ifdef ENABLE_ASYNC_PUSH
 /*
- * Called when inotify event is fired, which happens when acf file is closed or deleted.
- * Continues authentication and sends push_reply.
+ * Called when inotify event is fired, which happens when acf
+ * or connect-status file is closed or deleted.
+ * Continues authentication and sends push_reply
+ * (or be deferred again by client-connect)
  */
 void
 multi_process_file_closed(struct multi_context *m, const unsigned int mpp_flags)
@@ -2786,7 +2788,15 @@ multi_process_post(struct multi_context *m, struct multi_instance *mi, const uns
             {
                 multi_connection_established(m, mi);
             }
-
+#if defined(ENABLE_ASYNC_PUSH) && defined(ENABLE_DEF_AUTH)
+            if (mi->client_connect_status != CC_STATUS_ESTABLISHED
+                && mi->client_connect_defer_state.deferred_ret_file)
+            {
+                add_inotify_file_watch(m, mi, m->top.c2.inotify_fd,
+                                       mi->client_connect_defer_state.
+                                       deferred_ret_file);
+            }
+#endif
             /* tell scheduler to wake us up at some point in the future */
             multi_schedule_context_wakeup(m, mi);
         }
