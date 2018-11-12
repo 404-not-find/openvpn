@@ -3,6 +3,10 @@ Overview of changes in 2.5
 
 New features
 ------------
+Deferred client-connect
+    client-connect and the connect plugin API allow now asynchronous/deferred
+    return of configuration file in the same way as the auth-plugin.
+
 Client-specific tls-crypt keys (``--tls-crypt-v2``)
     ``tls-crypt-v2`` adds the ability to supply each client with a unique
     tls-crypt key.  This allows large organisations and VPN providers to profit

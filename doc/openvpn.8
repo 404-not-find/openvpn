@@ -3394,6 +3394,13 @@ is significant.  If
 .B script
 returns a non\-zero error status, it will cause the client
 to be disconnected.
+
+If a
+.B \-\-client\-connect cmd
+wants to defer the generating the configuration the script, should
+use the client_connect_deferred_file and client_connect_config_file
+environment variables and write status accordingly into these files
+(See the environment section below for more details).
 .\"*********************************************************
 .TP
 .B \-\-client\-disconnect cmd
@@ -3477,12 +3484,18 @@ This directory will be used by in the following cases:
 
 *
 .B \-\-client\-connect
-scripts to dynamically generate client\-specific
-configuration files.
+scripts and
+.B OPENVPN_PLUGIN_CLIENT_CONNECT
+plugin hook
+to dynamically generate client\-specific configuration files
+and return success/failure via client_connect_deferred_file
+when using deferred client connect method
 
 *
 .B OPENVPN_PLUGIN_AUTH_USER_PASS_VERIFY
-plugin hook to return success/failure via auth_control_file
+and
+
+plugin hook to return success/failure via auth_control_file/
 when using deferred auth method
 
 *
@@ -6610,6 +6623,42 @@ Total number of bytes sent to client during VPN session.
 Set prior to execution of the
 .B \-\-client\-disconnect
 script.
+.\"*********************************************************
+.TP
+.B client_connect_config_file
+The path to the configuration file that should be written by
+the
+.B \-\-client\-connect
+The content of this environment variable is identical to the
+file as a argument of the called
+.B \-\-client\-connect
+script.
+.\"*********************************************************
+.TP
+.B client_connect_deferred_file
+This file can be optionally written to communicate a status
+code of the
+.TP
+.B \-\-client\-connect
+script. If used for deferring, this file must be written
+before the
+.B \-\-client\-connect
+script exits. The first character in the file is interpreted
+and '1 is equal to normal script execution, '0' indicates an
+error (in the same way that a non zero exit status does) and
+'2 indicates that the script deferred returning the config
+file. When the script defers returning the configuration, it must
+must '2' to to the file to indicate the deferral.
+A background process or similar must then take of writing the
+configuration to the file indicated by the
+.B
+client_connect_config_file
+environment variable and when finished, write the a '1' to this
+file (or '0' in case of an error).
+
+The absence of any character in the file when the script finishes
+executing is interpreted the same as '1'. This allows script that
+are not written to support the defer mechanism to be used unmodified.
 .\"*********************************************************
 .TP
 .B common_name
