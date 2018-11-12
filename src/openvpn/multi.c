@@ -2044,7 +2044,8 @@ multi_client_connect_call_plugin_v1_deferred(struct multi_context *m,
 static enum client_connect_return
 multi_client_connect_call_plugin_v2(struct multi_context *m,
                                     struct multi_instance *mi,
-                                    unsigned int *option_types_found)
+                                    unsigned int *option_types_found,
+                                    bool deferred)
 {
     enum client_connect_return ret = CC_RET_SKIPPED;
 #ifdef ENABLE_PLUGIN
@@ -2052,30 +2053,65 @@ multi_client_connect_call_plugin_v2(struct multi_context *m,
     ASSERT(mi);
     ASSERT(option_types_found);
 
+    int call = deferred ? OPENVPN_PLUGIN_CLIENT_CONNECT_DEFER_V2 :
+               OPENVPN_PLUGIN_CLIENT_CONNECT_V2;
     /* V2 callback, use a plugin_return struct for passing back return info */
-    if (plugin_defined(mi->context.plugins, OPENVPN_PLUGIN_CLIENT_CONNECT_V2))
+    if (plugin_defined(mi->context.plugins, call))
     {
         struct plugin_return pr;
 
         plugin_return_init(&pr);
 
-        if (plugin_call(mi->context.plugins, OPENVPN_PLUGIN_CLIENT_CONNECT_V2,
-                        NULL, &pr, mi->context.c2.es)
-            != OPENVPN_PLUGIN_FUNC_SUCCESS)
-        {
-            msg(M_WARN, "WARNING: client-connect-v2 plugin call failed");
-            ret = CC_RET_FAILED;
-        }
-        else
+        int plug_ret = plugin_call(mi->context.plugins, call,
+                                   NULL, &pr, mi->context.c2.es);
+        if (plug_ret == OPENVPN_PLUGIN_FUNC_SUCCESS)
         {
             multi_client_connect_post_plugin(m, mi, &pr, option_types_found);
             ret = CC_RET_SUCCEEDED;
         }
+        else if (plug_ret == OPENVPN_PLUGIN_FUNC_DEFERRED)
+        {
+            ret = CC_RET_DEFERRED;
+            if (!(plugin_defined(mi->context.plugins,
+                                 OPENVPN_PLUGIN_CLIENT_CONNECT_DEFER_V2)))
+            {
+                msg(M_WARN, "A plugin that defers from the "
+                    "OPENVPN_PLUGIN_CLIENT_CONNECT_V2 call must also "
+                    "declare support for "
+                    "OPENVPN_PLUGIN_CLIENT_CONNECT_DEFER_V2");
+                ret = CC_RET_FAILED;
+            }
+        }
+        else
+        {
+            msg(M_WARN, "WARNING: client-connect-v2 plugin call failed");
+            ret = CC_RET_FAILED;
+        }
+
 
         plugin_return_free(&pr);
     }
 #endif /* ifdef ENABLE_PLUGIN */
     return ret;
+}
+
+
+static enum client_connect_return
+multi_client_connect_call_plugin_v2_initial(struct multi_context *m,
+                                            struct multi_instance *mi,
+                                            unsigned int *option_types_found)
+{
+    return multi_client_connect_call_plugin_v2(m, mi, option_types_found,
+                                               false);
+}
+
+static enum client_connect_return
+multi_client_connect_call_plugin_v2_deferred(struct multi_context *m,
+                                             struct multi_instance *mi,
+                                             unsigned int *option_types_found)
+{
+    return multi_client_connect_call_plugin_v2(m, mi, option_types_found,
+                                               true);
 }
 
 /**
@@ -2390,8 +2426,8 @@ static const struct client_connect_handlers client_connect_handlers[] = {
         .deferred = multi_client_connect_call_plugin_v1_deferred,
     },
     {
-        .main = multi_client_connect_call_plugin_v2,
-        .deferred = multi_client_connect_fail
+        .main = multi_client_connect_call_plugin_v2_initial,
+        .deferred = multi_client_connect_call_plugin_v2_deferred,
     },
     {
         .main = multi_client_connect_call_script,
